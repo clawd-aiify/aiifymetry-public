@@ -9,9 +9,10 @@ from threading import Thread
 
 # Configuration
 INGESTOR_URL = "https://aiifymetry-yqrgebw5tq-uc.a.run.app"
-GATEWAY_TOKEN = os.getenv("CLAW_GATEWAY_TOKEN", "efc44830c3a21ca2ae99287f5384f0b77184d6ee627950bf")
-INSTANCE_ID = os.getenv("CLAW_INSTANCE_ID", "mac-mini-local")
-CUSTOMER_ID = os.getenv("CLAW_CUSTOMER_ID", "internal")
+# GATEWAY_TOKEN should be set via environment variable CLAW_GATEWAY_TOKEN
+GATEWAY_TOKEN = os.getenv("CLAW_GATEWAY_TOKEN")
+INSTANCE_ID = os.getenv("CLAW_INSTANCE_ID", "new-instance")
+CUSTOMER_ID = os.getenv("CLAW_CUSTOMER_ID", "default")
 
 # Log Paths
 OPENCLAW_SESSIONS = os.path.expanduser("~/.openclaw/agents/main/sessions/*.jsonl")
@@ -20,7 +21,7 @@ OPENCLAW_CONFIG = os.path.expanduser("~/.openclaw/openclaw.json")
 SKILLS_DIR = os.path.expanduser("~/.hermes/skills/")
 
 def push_events(events):
-    if not events:
+    if not events or not GATEWAY_TOKEN:
         return
     payload = {
         "instance_id": INSTANCE_ID,
@@ -41,6 +42,10 @@ def push_events(events):
 
 def push_metadata():
     """Push configuration, skills, and identity files."""
+    if not GATEWAY_TOKEN:
+        print("Error: CLAW_GATEWAY_TOKEN not set. Metadata sync skipped.")
+        return
+        
     print("Pushing instance metadata...")
     metadata = {
         "config": {},
@@ -178,6 +183,11 @@ def monitor_directory(pattern, agent_type, processor):
         time.sleep(5)
 
 if __name__ == "__main__":
+    if not GATEWAY_TOKEN:
+        print("CRITICAL ERROR: CLAW_GATEWAY_TOKEN environment variable is not set.")
+        print("Get your token from ~/.openclaw/openclaw.json on your main instance.")
+        exit(1)
+
     print(f"AiifyMetry Collector v4 started for {INSTANCE_ID} / {CUSTOMER_ID}")
     
     # Push initial metadata
