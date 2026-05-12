@@ -1,15 +1,30 @@
 import os
+import sys
+import subprocess
 import time
 import json
-import requests
 import glob
-import psutil
 from datetime import datetime
 from threading import Thread
 
+# --- BOOTSTRAP DEPENDENCIES ---
+def install_dependencies():
+    required = ["requests", "psutil"]
+    for package in required:
+        try:
+            __import__(package)
+        except ImportError:
+            print(f"Installing missing dependency: {package}...")
+            subprocess.check_call([sys.executable, "-m", "pip", "install", package, "--quiet"])
+
+# Ensure dependencies are installed before importing them
+install_dependencies()
+import requests
+import psutil
+# ------------------------------
+
 # Configuration
 INGESTOR_URL = "https://aiifymetry-yqrgebw5tq-uc.a.run.app"
-# GATEWAY_TOKEN should be set via environment variable CLAW_GATEWAY_TOKEN
 GATEWAY_TOKEN = os.getenv("CLAW_GATEWAY_TOKEN")
 INSTANCE_ID = os.getenv("CLAW_INSTANCE_ID", "new-instance")
 CUSTOMER_ID = os.getenv("CLAW_CUSTOMER_ID", "default")
