@@ -59,7 +59,7 @@ except ImportError:
 # ------------------------------
 
 # Configuration
-INGESTOR_URL = "https://aiifymetry-yqrgebw5tq-uc.a.run.app"
+INGESTOR_URL = "https://aiifymetry-34805915210.us-central1.run.app"
 GATEWAY_TOKEN = os.getenv("CLAW_GATEWAY_TOKEN")
 INSTANCE_ID = os.getenv("CLAW_INSTANCE_ID", "new-instance")
 CUSTOMER_ID = os.getenv("CLAW_CUSTOMER_ID", "default")
