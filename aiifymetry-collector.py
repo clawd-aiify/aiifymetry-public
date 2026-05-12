@@ -10,17 +10,52 @@ from threading import Thread
 # --- BOOTSTRAP DEPENDENCIES ---
 def install_dependencies():
     required = ["requests", "psutil"]
+    
+    # Check if pip is available
+    pip_available = True
+    try:
+        subprocess.check_call([sys.executable, "-m", "pip", "--version"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except subprocess.CalledProcessError:
+        pip_available = False
+        
+    if not pip_available:
+        print("pip not found. Attempting to bootstrap pip with ensurepip...")
+        try:
+            subprocess.check_call([sys.executable, "-m", "ensurepip", "--user"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            pip_available = True
+        except:
+            print("CRITICAL: pip is not installed and ensurepip failed.")
+            print("Please run: sudo apt update && sudo apt install -y python3-pip")
+
     for package in required:
         try:
             __import__(package)
         except ImportError:
-            print(f"Installing missing dependency: {package}...")
-            subprocess.check_call([sys.executable, "-m", "pip", "install", package, "--quiet"])
+            if pip_available:
+                print(f"Installing missing dependency: {package}...")
+                try:
+                    subprocess.check_call([sys.executable, "-m", "pip", "install", package, "--quiet"])
+                except Exception as e:
+                    print(f"Failed to install {package}: {e}")
+            else:
+                print(f"Skipping {package} (pip missing).")
 
-# Ensure dependencies are installed before importing them
+# Run bootstrap
 install_dependencies()
-import requests
-import psutil
+
+# Attempt imports with graceful fallbacks
+try:
+    import requests
+except ImportError:
+    print("CRITICAL: 'requests' library is required. Please install it manually: pip install requests")
+    sys.exit(1)
+
+try:
+    import psutil
+    HAS_PSUTIL = True
+except ImportError:
+    print("Warning: 'psutil' missing. Hardware metrics will be disabled.")
+    HAS_PSUTIL = False
 # ------------------------------
 
 # Configuration
@@ -169,6 +204,7 @@ def process_generic_jsonl(line, path, agent_type):
 
 def collect_system_metrics():
     """Periodically push CPU/RAM usage."""
+    if not HAS_PSUTIL: return
     while True:
         try:
             metrics = {
@@ -200,7 +236,6 @@ def monitor_directory(pattern, agent_type, processor):
 if __name__ == "__main__":
     if not GATEWAY_TOKEN:
         print("CRITICAL ERROR: CLAW_GATEWAY_TOKEN environment variable is not set.")
-        print("Get your token from ~/.openclaw/openclaw.json on your main instance.")
         exit(1)
 
     print(f"AiifyMetry Collector v4 started for {INSTANCE_ID} / {CUSTOMER_ID}")
@@ -213,7 +248,7 @@ if __name__ == "__main__":
     Thread(target=monitor_directory, args=(CLAUDE_LOGS, "claudecode", lambda l, p: process_generic_jsonl(l, p, "claudecode")), daemon=True).start()
     Thread(target=collect_system_metrics, daemon=True).start()
     
-    # Push metadata periodically (every 10 mins)
+    # Push metadata periodically
     def periodic_metadata():
         while True:
             time.sleep(600)
