@@ -60,7 +60,24 @@ CUSTOMER_ID = os.getenv("CLAW_CUSTOMER_ID", "default")
 OPENCLAW_SESSIONS = os.path.expanduser("~/.openclaw/agents/main/sessions/*.jsonl")
 CLAUDE_LOGS = os.path.expanduser("~/.claude/projects/**/*.jsonl")
 OPENCLAW_CONFIG_PATH = os.path.expanduser("~/.openclaw/openclaw.json")
-SKILLS_DIR = os.path.expanduser("~/.hermes/skills/")
+
+# Skill roots — each entry is (root_dir, source_label)
+SKILL_ROOTS = [
+    (os.path.expanduser("~/.hermes/skills/"),            "hermes"),
+    (os.path.expanduser("~/.openclaw/skills/"),          "openclaw"),
+    (os.path.expanduser("~/.openclaw/workspace/skills/"), "workspace"),
+]
+
+# Workspace doc roots — only top-level .md files are collected here (no recursion)
+WORKSPACE_DOC_ROOTS = [
+    os.path.expanduser("~/.openclaw/workspace/"),
+]
+# Memory dirs — recursed but capped to the N most-recently modified files
+MEMORY_DOC_ROOTS = [
+    os.path.expanduser("~/.openclaw/workspace/memory/"),
+]
+MEMORY_MAX_FILES = 20
+MD_MAX_BYTES = 8 * 1024  # 8 KB per file
 
 def push_events(events):
     if not events or not GATEWAY_TOKEN: return
@@ -70,37 +87,114 @@ def push_events(events):
                       headers={"X-Gateway-Token": GATEWAY_TOKEN}, timeout=5)
     except: pass
 
+def _read_skill_description(skill_dir):
+    """Return first non-empty content from SKILL.md / README.md inside a skill dir, truncated."""
+    for candidate in ("SKILL.md", "README.md", "readme.md"):
+        p = os.path.join(skill_dir, candidate)
+        if os.path.isfile(p):
+            try:
+                with open(p, 'r', errors='replace') as f:
+                    text = f.read(MD_MAX_BYTES)
+                return text.strip() or None
+            except: pass
+    return None
+
+def _collect_skills():
+    """Return a deduplicated list of skill dicts from all skill roots."""
+    seen = set()
+    skills = []
+    for root, source in SKILL_ROOTS:
+        if not os.path.exists(root): continue
+        for item in os.listdir(root):
+            # Skip macOS artifacts and non-skill files
+            if item.startswith('.') or item.startswith('__'): continue
+            # Accept directories and .skill / .zip entries (use stem as name)
+            stem = item
+            for ext in ('.skill', '.zip'):
+                if item.endswith(ext):
+                    stem = item[:-len(ext)]
+                    break
+            if stem in seen: continue
+            seen.add(stem)
+            entry = {"name": stem, "source": source}
+            full_path = os.path.join(root, item)
+            if os.path.isdir(full_path):
+                desc = _read_skill_description(full_path)
+                if desc: entry["description"] = desc
+            skills.append(entry)
+    return skills
+
+def _read_md(path):
+    """Return {content, truncated?} for a markdown file."""
+    try:
+        with open(path, 'r', errors='replace') as f:
+            text = f.read(MD_MAX_BYTES)
+        entry = {"content": text.strip()}
+        if len(text) >= MD_MAX_BYTES:
+            entry["truncated"] = True
+        return entry
+    except:
+        return {}
+
+def _collect_workspace_docs():
+    """Collect top-level workspace .md files + N most-recent memory docs."""
+    docs = []
+    seen_paths = set()
+
+    # 1. Top-level workspace docs (no recursion into subdirs)
+    for root_path in WORKSPACE_DOC_ROOTS:
+        if not os.path.exists(root_path): continue
+        for fname in os.listdir(root_path):
+            if not fname.endswith('.md'): continue
+            full = os.path.join(root_path, fname)
+            if not os.path.isfile(full) or full in seen_paths: continue
+            seen_paths.add(full)
+            entry = {"name": fname, "path": full, "category": "workspace"}
+            entry.update(_read_md(full))
+            docs.append(entry)
+
+    # 2. Memory docs — most recently modified, capped
+    memory_files = []
+    for root_path in MEMORY_DOC_ROOTS:
+        if not os.path.exists(root_path): continue
+        for root, dirs, files in os.walk(root_path):
+            dirs[:] = [d for d in dirs if not d.startswith('.')]
+            for fname in files:
+                if not fname.endswith('.md'): continue
+                full = os.path.join(root, fname)
+                try:
+                    mtime = os.path.getmtime(full)
+                    memory_files.append((mtime, full, fname))
+                except: pass
+    memory_files.sort(reverse=True)
+    for _, full, fname in memory_files[:MEMORY_MAX_FILES]:
+        if full in seen_paths: continue
+        seen_paths.add(full)
+        entry = {"name": fname, "path": full, "category": "memory"}
+        entry.update(_read_md(full))
+        docs.append(entry)
+
+    return docs
+
 def push_metadata():
-    """Push configuration, skills, and identity files."""
+    """Push configuration, skills, and workspace docs."""
     if not GATEWAY_TOKEN: return
     print(f"[{datetime.now().strftime('%H:%M:%S')}] Syncing Workspace Metadata...")
     metadata = {"config": {}, "skills": [], "md_files": []}
-    
-    # 1. OpenClaw Config
+
+    # 1. OpenClaw config
     if os.path.exists(OPENCLAW_CONFIG_PATH):
         try:
             with open(OPENCLAW_CONFIG_PATH, 'r') as f: metadata["config"] = json.load(f)
         except: pass
-        
-    # 2. Skills Discovery
-    if os.path.exists(SKILLS_DIR):
-        for item in os.listdir(SKILLS_DIR):
-            path = os.path.join(SKILLS_DIR, item)
-            if os.path.isdir(path): metadata["skills"].append({"name": item})
-                
-    # 3. Workspace Docs Discovery (Aggressive Search)
-    search_paths = [os.getcwd(), os.path.expanduser("~/.openclaw")]
-    seen_files = set()
-    for root_path in search_paths:
-        if not os.path.exists(root_path): continue
-        # Find all .md files up to 2 levels deep
-        for root, dirs, files in os.walk(root_path):
-            depth = root[len(root_path):].count(os.sep)
-            if depth > 2: continue
-            for f in files:
-                if f.endswith(".md") and f not in seen_files:
-                    metadata["md_files"].append({"name": f, "path": os.path.join(root, f)})
-                    seen_files.add(f)
+
+    # 2. Skills from all roots
+    metadata["skills"] = _collect_skills()
+    print(f"  → {len(metadata['skills'])} skills collected")
+
+    # 3. Workspace docs with content
+    metadata["md_files"] = _collect_workspace_docs()
+    print(f"  → {len(metadata['md_files'])} workspace docs collected")
 
     push_events([{"event_type": "metadata", "agent_type": "instance", "payload": metadata, "timestamp": datetime.utcnow().isoformat()}])
 
