@@ -79,13 +79,16 @@ MEMORY_DOC_ROOTS = [
 MEMORY_MAX_FILES = 20
 MD_MAX_BYTES = 8 * 1024  # 8 KB per file
 
-def push_events(events):
+def push_events(events, timeout=10):
     if not events or not GATEWAY_TOKEN: return
     payload = {"instance_id": INSTANCE_ID, "customer_id": CUSTOMER_ID, "events": events}
     try:
-        requests.post(f"{INGESTOR_URL}/ingest", json=payload, 
-                      headers={"X-Gateway-Token": GATEWAY_TOKEN}, timeout=5)
-    except: pass
+        r = requests.post(f"{INGESTOR_URL}/ingest", json=payload,
+                          headers={"X-Gateway-Token": GATEWAY_TOKEN}, timeout=timeout)
+        if r.status_code != 200:
+            print(f"  ⚠ Ingest returned {r.status_code}: {r.text[:120]}")
+    except Exception as e:
+        print(f"  ⚠ push_events failed: {e}")
 
 def _read_skill_description(skill_dir):
     """Return first non-empty content from SKILL.md / README.md inside a skill dir, truncated."""
@@ -196,7 +199,7 @@ def push_metadata():
     metadata["md_files"] = _collect_workspace_docs()
     print(f"  → {len(metadata['md_files'])} workspace docs collected")
 
-    push_events([{"event_type": "metadata", "agent_type": "instance", "payload": metadata, "timestamp": datetime.utcnow().isoformat()}])
+    push_events([{"event_type": "metadata", "agent_type": "instance", "payload": metadata, "timestamp": datetime.utcnow().isoformat()}], timeout=30)
 
 def process_line(line, path, agent_type):
     try:
