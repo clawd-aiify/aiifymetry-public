@@ -44,8 +44,38 @@ except ImportError: HAS_PSUTIL = False
 
 INGESTOR_URL  = "https://aiifymetry-34805915210.us-central1.run.app"
 GATEWAY_TOKEN = (os.getenv("CLAW_GATEWAY_TOKEN") or "").strip()
-INSTANCE_ID   = os.getenv("CLAW_INSTANCE_ID", "new-instance")
-CUSTOMER_ID   = os.getenv("CLAW_CUSTOMER_ID", "default")
+
+def _detect_instance_id():
+    override = (os.getenv("CLAW_INSTANCE_ID") or "").strip()
+    if override:
+        return override
+    import socket
+    return socket.gethostname()
+
+def _detect_instance_ip():
+    override = (os.getenv("CLAW_INSTANCE_IP") or "").strip()
+    if override:
+        return override
+    # Try GCP metadata endpoint first (fast, no external traffic)
+    try:
+        import urllib.request as _ur
+        req = _ur.Request(
+            "http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/externalIp",
+            headers={"Metadata-Flavor": "Google"},
+        )
+        return _ur.urlopen(req, timeout=2).read().decode().strip()
+    except Exception:
+        pass
+    # Fall back to public IP echo service
+    for url in ("https://api.ipify.org", "https://ifconfig.me/ip"):
+        try:
+            return _ur.urlopen(url, timeout=5).read().decode().strip()
+        except Exception:
+            pass
+    return "unknown"
+
+INSTANCE_ID = _detect_instance_id()
+CUSTOMER_ID = _detect_instance_ip()  # used as customer_id in payload (tracks IP per instance)
 
 OC = os.path.expanduser("~/.openclaw")
 
